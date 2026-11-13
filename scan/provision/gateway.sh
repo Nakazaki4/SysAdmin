@@ -53,9 +53,14 @@ iptables -A INPUT   -i lo -j ACCEPT
 # on the subnet-B interface. The vagrant NAT adapter (enp0s3) must stay fully
 # open so provisioning and `vagrant ssh` keep working.
 iptables -A INPUT -i $WAN -j ACCEPT
+# DHCP server on the subnet-A interface (dnsmasq hands out leases to clientA).
+# The request comes from 0.0.0.0 to 255.255.255.255, so match by interface.
+iptables -A INPUT -i $INTERFACE_A -p udp --dport 67 -m comment --comment "F4: allow DHCP A->gw" -j ACCEPT
 # DNS from both lab subnets (the gateway is their resolver, see dns.sh)
 iptables -A INPUT -s $NETWORK_A -p udp --dport 53 -m comment --comment "F4: allow DNS A->gw" -j ACCEPT
 iptables -A INPUT -s $NETWORK_B -p udp --dport 53 -m comment --comment "F4: allow DNS B->gw" -j ACCEPT
+iptables -A INPUT -s $NETWORK_A -p tcp --dport 53 -m comment --comment "F4: allow DNS-TCP A->gw" -j ACCEPT
+iptables -A INPUT -s $NETWORK_B -p tcp --dport 53 -m comment --comment "F4: allow DNS-TCP B->gw" -j ACCEPT
 # ICMP so ping and path discovery keep working
 iptables -A INPUT -p icmp -j ACCEPT
 # Everything else to the gateway (including SSH/22 from the lab) is dropped by policy.
