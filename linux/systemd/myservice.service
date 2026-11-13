@@ -1,0 +1,13 @@
+[Unit]
+Description=Clean unused docker resources
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/docker-clean.sh
+Restart=always
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+Environment=INTERVAL=3600

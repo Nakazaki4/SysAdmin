@@ -1,0 +1,3 @@
+Cmnd_Alias CMD = /usr/bin/systemctl restart docker-clean
+
+%developer ALL=(root) CMD

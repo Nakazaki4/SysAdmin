@@ -1,0 +1,103 @@
+Vagrant.configure("2") do |config|
+  config.vm.box     = "debian-lvm"
+  config.vm.box_url = "file://#{File.expand_path('preseed/debian-lvm.box', __dir__)}"
+
+  # ------------------------------------------------------------------ gateway
+  config.vm.define "gateway" do |g|
+    g.vm.hostname = "gateway"
+    g.vm.network "private_network", ip: "10.10.10.10", virtualbox__intnet: "subnetA", auto_config: false
+    g.vm.network "private_network", ip: "10.10.20.10", virtualbox__intnet: "subnetB", auto_config: false
+    g.vm.provision "shell", path: "provision/linux.sh"
+    g.vm.provision "shell", path: "provision/login.sh"
+    g.vm.provision "shell", path: "provision/gateway.sh"
+    g.vm.provision "shell", path: "provision/dhcp.sh"
+    g.vm.provision "shell", path: "provision/dns.sh"
+    g.vm.provision "shell", path: "provision/bastion.sh"
+  end
+
+  # ----------------------------------------------------------------- client A
+  # DHCP client on subnet A. The fixed MAC is what the DHCP reservation matches.
+  config.vm.define "clientA" do |ca|
+    ca.vm.hostname = "client-a"
+    ca.vm.network "private_network", ip: "10.10.10.20", virtualbox__intnet: "subnetA",
+                  auto_config: false, mac: "001A2B3C4D5F"
+    ca.vm.provision "shell", path: "provision/linux.sh"
+    ca.vm.provision "shell", path: "provision/login.sh"
+    ca.vm.provision "shell", name: "network", inline: <<~'SHELL'
+      set -euo pipefail
+
+      # Restrict sshd on the lab interface: any user, but only from the gateway.
+      # Keep the vagrant NAT range open so `vagrant ssh` and provisioning work.
+      cat > /etc/ssh/sshd_config.d/10-gateway-only.conf <<EOF
+      AllowUsers *@10.0.2.* *@10.10.10.10
+      EOF
+      sshd -t
+      systemctl reload ssh
+
+      # Debian must read interfaces.d/
+      grep -q '^source /etc/network/interfaces.d' /etc/network/interfaces ||
+        echo 'source /etc/network/interfaces.d/*' >> /etc/network/interfaces
+
+      # NAT adapter: keep 10.0.2.15 for vagrant ssh, but no default route (at every boot)
+      sed -i 's|^iface enp0s3 inet dhcp$|iface enp0s3 inet static\n    address 10.0.2.15/24|' \
+        /etc/network/interfaces
+
+      # Lab interface: address, gateway, DNS and search domain from the gateway's DHCP
+      cat > /etc/network/interfaces.d/lab <<EOF
+      auto enp0s8
+      iface enp0s8 inet dhcp
+      EOF
+
+      # Apply now without cutting vagrant ssh
+      ip route del default via 10.0.2.2 dev enp0s3 2>/dev/null || true
+      ifdown --force enp0s8 2>/dev/null || true
+      ifup enp0s8
+    SHELL
+  end
+
+  # ----------------------------------------------------------------- client B
+  # Static address on subnet B. Runs the web server (the allowed service).
+  config.vm.define "clientB" do |cb|
+    cb.vm.hostname = "client-b"
+    cb.vm.network "private_network", ip: "10.10.20.20", virtualbox__intnet: "subnetB",
+                  auto_config: false
+    cb.vm.provision "shell", path: "provision/linux.sh"
+    cb.vm.provision "shell", path: "provision/login.sh"
+
+    cb.vm.provision "shell", name: "network", inline: <<~'SHELL'
+      set -euo pipefail
+
+      # Restrict sshd on the lab interface: any user, but only from the gateway.
+      # Keep the vagrant NAT range open so `vagrant ssh` and provisioning work.
+      cat > /etc/ssh/sshd_config.d/10-gateway-only.conf <<EOF
+      AllowUsers *@10.0.2.* *@10.10.20.10
+      EOF
+      sshd -t
+      systemctl reload ssh
+
+      grep -q '^source /etc/network/interfaces.d' /etc/network/interfaces ||
+        echo 'source /etc/network/interfaces.d/*' >> /etc/network/interfaces
+
+      sed -i 's|^iface enp0s3 inet dhcp$|iface enp0s3 inet static\n    address 10.0.2.15/24|' \
+        /etc/network/interfaces
+
+      # Lab interface: fixed address, default route via the gateway
+      cat > /etc/network/interfaces.d/lab <<EOF
+      auto enp0s8
+      iface enp0s8 inet static
+          address 10.10.20.20/24
+          gateway 10.10.20.10
+      EOF
+
+      # DNS: the gateway (client A gets this from DHCP instead)
+      cat > /etc/resolv.conf <<EOF
+      search lab.internal
+      nameserver 10.10.20.10
+      EOF
+
+      ip route del default via 10.0.2.2 dev enp0s3 2>/dev/null || true
+      ifdown --force enp0s8 2>/dev/null || true
+      ifup enp0s8
+    SHELL
+  end
+end

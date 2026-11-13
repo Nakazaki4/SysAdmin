@@ -1,0 +1,17 @@
+Host bastion
+    HostName 127.0.0.1
+    Port 2222
+    User admin1
+    IdentityFile ~/.ssh/remote_machines_ed25519
+
+Host client-a
+    HostName 10.10.10.20
+    User admin1
+    IdentityFile ~/.ssh/remote_machines_ed25519
+    ProxyJump bastion
+
+Host client-b
+    HostName 10.10.20.20
+    User admin1
+    IdentityFile ~/.ssh/remote_machines_ed25519
+    ProxyJump bastion

@@ -1,0 +1,3 @@
+Cmnd_Alias DOCKER_CLEAN = /usr/bin/systemctl restart docker-clean
+
+%deploy ALL=(root) DOCKER_CLEAN

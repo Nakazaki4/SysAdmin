@@ -1,0 +1,11 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "debian-lvm"
+  config.vm.box_url = "file://#{File.expand_path('preseed/debian-lvm.box', __dir__)}"
+
+  config.vm.define "bastion" do |b|
+    b.vm.network "private_network", ip: "192.168.56.10"
+    b.vm.hostname = "bastion"
+    b.vm.provision "shell", path: "provision/linux.sh"
+    b.vm.provision "shell", path: "provision/login.sh"
+  end
+end
