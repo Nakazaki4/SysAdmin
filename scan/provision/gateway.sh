@@ -39,17 +39,41 @@ apt-get install -y -q iptables iptables-persistent dnsutils tcpdump
 
 ## Firewall: start clean, so running this again doesn't duplicate rules
 iptables -F FORWARD
+iptables -F INPUT
 iptables -t nat -F POSTROUTING
-iptables -P FORWARD DROP                                    # default deny
+iptables -P FORWARD DROP                                    # default deny on transit
+iptables -P INPUT DROP                                      # default deny on the gateway itself
 
 # Replies to allowed traffic (echo-reply, HTTP responses, internet replies)
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT   -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT   -i lo -j ACCEPT
 
-# Between the subnets: exactly two things
-# 1. ICMP, both directions
+# INPUT (traffic TO the gateway itself): finding F4 — SSH and DNS were exposed
+# on the subnet-B interface. The vagrant NAT adapter (enp0s3) must stay fully
+# open so provisioning and `vagrant ssh` keep working.
+iptables -A INPUT -i $WAN -j ACCEPT
+# DNS from both lab subnets (the gateway is their resolver, see dns.sh)
+iptables -A INPUT -s $NETWORK_A -p udp --dport 53 -m comment --comment "F4: allow DNS A->gw" -j ACCEPT
+iptables -A INPUT -s $NETWORK_B -p udp --dport 53 -m comment --comment "F4: allow DNS B->gw" -j ACCEPT
+# ICMP so ping and path discovery keep working
+iptables -A INPUT -p icmp -j ACCEPT
+# Everything else to the gateway (including SSH/22 from the lab) is dropped by policy.
+
+# Between the subnets: ICMP in both directions, and the one allowed service.
 iptables -A FORWARD -s $NETWORK_A -d $NETWORK_B -p icmp -m comment --comment "allow: icmp A->B" -j ACCEPT
 iptables -A FORWARD -s $NETWORK_B -d $NETWORK_A -p icmp -m comment --comment "allow: icmp B->A" -j ACCEPT
-iptables -A FORWARD -s $NETWORK_A -d $NETWORK_B -p tcp --dport 3000 -j ACCEPT
+
+# F2 remediation — rate-limit the Juice Shop port on NEW connections to blunt
+# brute-force. 10 new connections per source IP per minute is enough for an
+# admin browsing the app, far too few for a credential-stuffing run.
+iptables -A FORWARD -s $NETWORK_A -d $NETWORK_B -p tcp --dport 3000 \
+  -m conntrack --ctstate NEW \
+  -m hashlimit --hashlimit-above 10/minute --hashlimit-burst 20 \
+  --hashlimit-mode srcip --hashlimit-name juiceshop \
+  -m comment --comment "F2: rate-limit NEW conns to juiceshop" -j DROP
+iptables -A FORWARD -s $NETWORK_A -d $NETWORK_B -p tcp --dport 3000 \
+  -m comment --comment "allow: juiceshop A->B" -j ACCEPT
 
 # Both subnets -> internet (only out through the WAN, so it can't open A<->B)
 iptables -A FORWARD -s $NETWORK_A -o $WAN -j ACCEPT
