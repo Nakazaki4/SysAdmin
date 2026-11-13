@@ -1,0 +1,13 @@
+# Offline crack of the admin password hash leaked in the JWT returned by F1's SQLi.
+#
+# Hash extracted from the SQLi response (10-curl-sqli-login.txt), decoded JWT payload:
+#   "password": "0192023a7bbd73250516f069df18b500"
+#
+# Verify that Juice Shop's default admin password matches:
+
+$ echo -n "admin123" | md5sum
+0192023a7bbd73250516f069df18b500  -
+
+# Match. The administrator account's password is "admin123".
+# Unsalted MD5 means any password reused by this user is instantly recoverable
+# from a stolen or decoded token, even without the SQLi.

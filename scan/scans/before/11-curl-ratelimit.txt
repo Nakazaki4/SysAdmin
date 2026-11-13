@@ -1,0 +1,10 @@
+attempt=401 time=0.012577s
+attempt=401 time=0.008751s
+attempt=401 time=0.008309s
+attempt=401 time=0.008575s
+attempt=401 time=0.010593s
+attempt=401 time=0.009558s
+attempt=401 time=0.010660s
+attempt=401 time=0.009369s
+attempt=401 time=0.016080s
+attempt=401 time=0.008941s
