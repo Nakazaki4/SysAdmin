@@ -1,6 +1,6 @@
-Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 13:10 +00
-Nmap scan report for 10.10.20.20
-Host is up (0.00098s latency).
+Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 14:40 +00
+Nmap scan report for clientb.lab.internal (10.10.20.20)
+Host is up (0.0013s latency).
 Not shown: 999 filtered tcp ports (no-response)
 PORT     STATE SERVICE
 3000/tcp open  ppp
@@ -9,4 +9,4 @@ Aggressive OS guesses: Linux 4.15 - 5.19 (91%), Linux 4.19 (91%), Linux 5.0 - 5.
 No exact OS matches for host (test conditions non-ideal).
 
 OS detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap done: 1 IP address (1 host up) scanned in 200.81 seconds
+Nmap done: 1 IP address (1 host up) scanned in 191.47 seconds
