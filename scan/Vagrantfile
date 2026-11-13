@@ -107,5 +107,9 @@ Vagrant.configure("2") do |config|
       ifdown --force enp0s8 2>/dev/null || true
       ifup enp0s8
     SHELL
+
+    # nginx binds to the lab IP (10.10.20.20), so it must run AFTER the
+    # network inline above brings that address up.
+    cb.vm.provision "shell", path: "provision/nginx.sh"
   end
 end

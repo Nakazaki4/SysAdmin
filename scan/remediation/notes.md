@@ -7,7 +7,7 @@ Each finding is linked to the commit that fixes it. All fixes live in the IaC
 |---|---|---|---|
 | F1 — SQLi admin bypass on `/rest/user/login` | Compensating controls only (service cannot be patched) | see F2, F4 | `provision/gateway.sh` |
 | F2 — No login rate-limit | Fixed via network containment | `c131905` | `provision/gateway.sh` |
-| F3 — Info disclosure (`/rest/admin/application-version`, `/ftp`) | Accepted risk + segmentation | existing segmentation in `provision/gateway.sh` | `provision/gateway.sh` |
+| F3 — Info disclosure (`/rest/admin/application-version`, `/ftp`) | **Fixed** via reverse proxy on clientB | `<nginx-commit>` | `provision/juiceshop.sh`, `provision/nginx.sh`, `Vagrantfile` |
 | F4 — Gateway exposed SSH/DNS on subnet-B interface | Fixed | `c131905` | `provision/gateway.sh` |
 | F5 — Weak admin password + MD5-in-JWT | Compensating controls only | see F2 | `provision/gateway.sh` |
 | Extra — `admin1`/`dev1`/`deploy1` had no password | Fixed | `a81a167` | `provision/login.sh` |
@@ -32,6 +32,28 @@ File: [provision/gateway.sh](../provision/gateway.sh)
   layer can get to mitigating F1/F5 (it raises the cost of SQLi retries and of
   stealing a token, though a single successful SQLi still works).
 
+### `<nginx-commit>` — containment of Juice Shop's information disclosure
+
+Files: [provision/juiceshop.sh](../provision/juiceshop.sh),
+[provision/nginx.sh](../provision/nginx.sh), [Vagrantfile](../Vagrantfile).
+
+- Juice Shop is now started with `-p 127.0.0.1:3000:3000` instead of
+  `-p 0.0.0.0:3000:3000`, so the container is only reachable from inside
+  clientB.
+- A new provisioner `nginx.sh` installs nginx and configures it as the
+  subnet-facing listener on `10.10.20.20:3000`. Two `location` blocks
+  return 404 before the request reaches the upstream:
+  - `^/ftp(/|$)` — the training-content directory listing.
+  - `/rest/admin/application-version` — the unauthenticated version banner.
+- All other paths proxy through to `http://127.0.0.1:3000` unchanged, so the
+  app continues to function and the F1 SQLi still demonstrates — containment
+  at the perimeter, not a service patch.
+- `nginx.sh` is wired into clientB **after** the network inline, because
+  nginx binds to the lab IP and that address is not up until the inline
+  `ifup enp0s8` runs.
+- Also fixes a pre-existing typo `apt-get incertistall` in `juiceshop.sh`
+  that would have broken fresh provisioning.
+
 ### `a81a167` — login.sh: set passwords for the three lab users
 
 File: [provision/login.sh](../provision/login.sh)
@@ -55,16 +77,10 @@ The subject explicitly asks: for the deliberately vulnerable service, patch by
     attempts from one source noisy and self-limiting.
   - No further IaC change; documented as accepted risk.
 
-- **F3 (info disclosure)** cannot be fixed at the firewall level because `/ftp`
-  and `/rest/admin/application-version` are served on the same port as the
-  rest of the app. A reverse proxy on clientB with a path allowlist would be
-  the next level of containment; that is a larger change and was declined for
-  this project's scope. The accepted mitigation is:
-  - The port is only reachable from subnet A (segmentation).
-  - Juice Shop's `/ftp` directory contains files intentionally planted for
-    training (`incident-support.kdbx`, `coupons_2013.md.bak`, etc.); nothing
-    in that directory is production data.
-  - Documented in the report under "accepted risk".
+- **F3 (info disclosure)** cannot be fixed at the *firewall* level because
+  `/ftp` and `/rest/admin/application-version` share the port with the real
+  app. Containment was done at the next layer up — a reverse proxy on
+  clientB that returns 404 for those paths. See `<nginx-commit>`.
 
 ## Accepted risks (documented, not fixed)
 

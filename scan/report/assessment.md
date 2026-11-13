@@ -22,17 +22,20 @@ It turned out it did not contain them at all: there was no rate-limit between
 subnet A and the service, so the one SQL-injection bug that unlocks the admin
 account could be chained with unlimited password guessing.
 
-Five findings were investigated. Three were addressed by changes to the
-Infrastructure-as-Code so that rebuilding the lab from scratch does not
-reintroduce them. The remaining two are Juice Shop internals which the
-project rules forbid patching; those are documented as accepted risk with the
-compensating controls that mitigate them.
+Five findings were investigated. Three of them (F2, F3, F4) were closed by
+changes to the Infrastructure-as-Code so that rebuilding the lab from scratch
+does not reintroduce them — including F3, which was contained by adding an
+nginx reverse-proxy on clientB that strips the two information-disclosure
+paths before they reach Juice Shop. The remaining two (F1, F5) are Juice
+Shop internals which the project rules forbid patching; those are documented
+as accepted risk with the compensating controls (rate-limit, segmentation)
+that mitigate them.
 
 | ID | Finding | Severity | Likelihood | Status |
 |---|---|---|---|---|
 | F1 | SQL injection admin bypass on `/rest/user/login` | Critical | High | Compensating controls (containment) |
 | F2 | No rate-limit on the authentication endpoint | High | High | **Fixed** (gateway hashlimit) |
-| F3 | Information disclosure (`/rest/admin/application-version`, `/ftp`) | Medium | High | Accepted risk + segmentation |
+| F3 | Information disclosure (`/rest/admin/application-version`, `/ftp`) | Medium | High | **Fixed** (nginx reverse proxy strips the paths) |
 | F4 | Gateway exposed SSH and DNS to the lab subnets | High | Medium | **Fixed** (gateway INPUT chain) |
 | F5 | Weak admin password + MD5 hash leaked in JWT | High | Medium | Compensating controls (rate-limit) |
 
@@ -215,21 +218,39 @@ curl -s http://10.10.20.20:3000/ftp
 encrypted secrets (`incident-support.kdbx`), coupon codes, and the app's
 `package.json.bak` which reveals the full dependency tree.
 
-**Remediation.** Accepted risk with network segmentation as the compensating
-control:
+**Remediation.** Commit [`<nginx-commit>`](../remediation/notes.md). Juice
+Shop is now bound to `127.0.0.1:3000` inside clientB, and nginx listens on
+`10.10.20.20:3000` as a reverse proxy. Two `location` blocks return 404 for
+the sensitive paths before the request ever reaches the app:
 
-- These endpoints share the port with the real application, so they cannot be
-  blocked at the firewall layer without also blocking the service.
-- Removing them would require either a reverse-proxy with a path allowlist on
-  clientB or patching Juice Shop itself — both outside this project's scope.
-- The files in `/ftp` are Juice Shop's built-in training content; no
-  production data is present.
+```nginx
+location ~ ^/ftp(/|$)                         { return 404; }
+location = /rest/admin/application-version    { return 404; }
+```
 
-**Verification command (fails — accepted).**
+Everything else is proxied through unchanged, so the app still functions and
+the SQLi (F1) still demonstrates — containment at the perimeter, not a patch
+to the service. This matches the subject's "firewall policy, network
+segmentation, access control" definition of containment.
+
+**Verification command (passes after remediation).**
 
 ```bash
-curl -fs http://10.10.20.20:3000/rest/admin/application-version >/dev/null && echo "F3 OPEN (accepted)"
+# Both paths must 404; the home page must still 200.
+test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404 \
+  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/rest/admin/application-version)" = 404 \
+  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/)" = 200 \
+  && echo "F3 CLOSED"
 ```
+
+**Before vs after.**
+
+| File | Content |
+|---|---|
+| `scans/before/08-curl-version.txt` | `HTTP/1.1 200 OK` + `{"version":"20.4.0-SNAPSHOT"}` |
+| `scans/after/08-curl-version.txt` | `HTTP/1.1 404 Not Found` from nginx |
+| `scans/before/09-curl-ftp.txt` | Full HTML directory listing of 11 files |
+| `scans/after/09-curl-ftp.txt` | `HTTP/1.1 404 Not Found` from nginx |
 
 ---
 
@@ -371,10 +392,13 @@ for the commit-per-finding mapping.
   gets an address on rebuild (regression discovered during verification).
 - `a81a167` — `login.sh`: give `admin1`/`dev1`/`deploy1` a password so `sudo`
   prompts are answerable.
+- `<nginx-commit>` — F3 reverse proxy. Juice Shop bound to loopback,
+  nginx on `10.10.20.20:3000` returns 404 for `/ftp*` and
+  `/rest/admin/application-version`, proxies everything else through.
 
-The three remaining findings (F1, F3, F5) are Juice Shop internals. They are
-not patched; they are **contained** at the network layer (firewall rate-limit,
-segmentation) and documented.
+The two remaining findings (F1, F5) are Juice Shop internals. They are
+not patched; they are **contained** at the network layer (firewall
+rate-limit, segmentation) and documented.
 
 ---
 
@@ -392,16 +416,18 @@ The relevant pairs:
 | Finding | Before | After | Difference |
 |---|---|---|---|
 | F2 | `11-curl-ratelimit.txt` | `11-curl-ratelimit.txt` | All 10 attempts served → several attempts timed out (000 after 5 s) |
+| F3 | `08-curl-version.txt` | `08-curl-version.txt` | `200 OK` + version JSON → `404 Not Found` (from nginx) |
+| F3 | `09-curl-ftp.txt` | `09-curl-ftp.txt` | Full HTML directory listing → `404 Not Found` (from nginx) |
 | F4 | `05-nmap-full-tcp-gateway.txt` | `05-nmap-full-tcp-gateway.txt` | `22/tcp open ssh` + `53/tcp` → `53/tcp` only |
 | F4 | `12-gateway-iptables-live.txt` | `12-gateway-iptables-live.txt` | No INPUT rules → INPUT policy DROP with allowlist |
 
-The other scans (`01-04`, `06-10`) produce the same output before and after,
-because the fixes do not change what clientA sees of subnet B's service or of
-the lab's topology — the service is still reachable, the SQLi still works, the
-`/ftp` listing still lists, etc. That is the intended outcome: the three
-findings that were fixed are *infrastructure* findings; the three findings
-that are accepted-risk are *service* findings, and must still deploy on
-rebuild per the project rules.
+The remaining scans (`01-04`, `06-07`, `10`) produce the same output before
+and after, because the fixes do not change what clientA sees of the lab
+topology — the service is still reachable, the SQLi still works, etc. That
+is the intended outcome: the four findings that were fixed are either
+*infrastructure* findings (F2, F4) or *path-level containment* (F3); the
+two findings that remain as accepted-risk are *service* findings that must
+still deploy on rebuild per the project rules.
 
 ### Targeted one-command verification per finding
 
@@ -419,8 +445,11 @@ for i in $(seq 1 25); do curl -s --max-time 5 -o /dev/null -w "%{http_code}\n" \
   -H 'Content-Type: application/json' -d "{\"email\":\"a@b\",\"password\":\"x$i\"}"; done | grep -c '^000'
 # >0 means the rate-limit fired
 
-# F3 — accepted, info disclosure:
-curl -fs http://10.10.20.20:3000/rest/admin/application-version >/dev/null && echo "F3 OPEN (accepted)"
+# F3 — fixed; nginx returns 404 for both paths, app home still 200:
+test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404 \
+  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/rest/admin/application-version)" = 404 \
+  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/)" = 200 \
+  && echo "F3 CLOSED"
 
 # F4 — fixed; SSH to the gateway is filtered:
 sudo nmap -Pn -p 22 10.10.20.10 | grep -E '^22/tcp' | grep -q filtered && echo "F4 CLOSED"
@@ -446,8 +475,10 @@ Issues known to the assessor and deliberately left unaddressed:
 - **`AllowUsers *@10.0.2.*` on clientB's sshd** — required for Vagrant
   provisioning via NAT. In production there would be no NAT adapter and this
   clause would be removed.
-- **Juice Shop internal bugs (F1, F3, F5).** Service-level fixes forbidden by
-  project rules; contained at the network layer where possible.
+- **Juice Shop internal bugs (F1, F5).** Service-level fixes forbidden by
+  project rules; contained at the network layer where possible (the
+  rate-limit addressed brute-force; the SQLi and the MD5-in-JWT are
+  structural). F3 was fixable with a reverse proxy and is now closed.
 
 ---
 

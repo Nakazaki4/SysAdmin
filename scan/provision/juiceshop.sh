@@ -1,6 +1,6 @@
 # Add Docker's official GPG key:
 apt-get -y update
-apt-get incertistall -y ca-certificates curl
+apt-get install -y ca-certificates curl
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
@@ -21,4 +21,10 @@ systemctl enable --now docker
 docker --version
 
 docker pull bkimminich/juice-shop
-docker run -d --rm -p 0.0.0.0:3000:3000 bkimminich/juice-shop
+# Bind to loopback only. The subnet-wide listener is nginx (see nginx.sh),
+# which strips the sensitive paths before proxying to this container.
+# Kill any prior juice-shop container (named or anonymous) so rerunning
+# this script is safe.
+docker ps -aq --filter ancestor=bkimminich/juice-shop | xargs -r docker rm -f
+docker run -d --restart=unless-stopped --name juiceshop \
+  -p 127.0.0.1:3000:3000 bkimminich/juice-shop
