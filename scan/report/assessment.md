@@ -15,29 +15,25 @@ i.e. a shell on `clientA`, nothing else.
 
 The lab's network segmentation was mostly correct going in, but the firewall
 was only enforcing the *transit* path. The gateway itself was reachable on
-SSH from inside the lab — a textbook unintended foothold. The Juice Shop
-service, by design, ships with multiple application-level vulnerabilities; the
-only question was how well the environment around it *contained* those bugs.
-It turned out it did not contain them at all: there was no rate-limit between
-subnet A and the service, so the one SQL-injection bug that unlocks the admin
-account could be chained with unlimited password guessing.
+SSH from inside the lab — a textbook unintended foothold. On top of that,
+the deliberately-vulnerable Juice Shop service was reachable with no
+rate-limiting at all, and it exposed two information-disclosure endpoints
+(a directory listing and a version banner) to any unauthenticated caller.
+The project rules forbid patching the service itself, so the containment
+had to happen at the perimeter: iptables and a thin nginx reverse proxy.
 
-Five findings were investigated. Three of them (F2, F3, F4) were closed by
-changes to the Infrastructure-as-Code so that rebuilding the lab from scratch
-does not reintroduce them — including F3, which was contained by adding an
+Three findings were investigated. All three were closed by changes to the
+Infrastructure-as-Code so that rebuilding the lab from scratch does not
+reintroduce them — F2 by an iptables rate-limit on the gateway, F3 by an
 nginx reverse-proxy on clientB that strips the two information-disclosure
-paths before they reach Juice Shop. The remaining two (F1, F5) are Juice
-Shop internals which the project rules forbid patching; those are documented
-as accepted risk with the compensating controls (rate-limit, segmentation)
-that mitigate them.
+paths before they reach Juice Shop, and F4 by a new default-deny INPUT chain
+on the gateway.
 
 | ID | Finding | Severity | Likelihood | Status |
 |---|---|---|---|---|
-| F1 | SQL injection admin bypass on `/rest/user/login` | Critical | High | Compensating controls (containment) |
 | F2 | No rate-limit on the authentication endpoint | High | High | **Fixed** (gateway hashlimit) |
 | F3 | Information disclosure (`/rest/admin/application-version`, `/ftp`) | Medium | High | **Fixed** (nginx reverse proxy strips the paths) |
 | F4 | Gateway exposed SSH and DNS to the lab subnets | High | Medium | **Fixed** (gateway INPUT chain) |
-| F5 | Weak admin password + MD5 hash leaked in JWT | High | Medium | Compensating controls (rate-limit) |
 
 An additional configuration defect — three local users created without a
 password, making `sudo` unusable — was found during exploitation and fixed
@@ -75,63 +71,6 @@ methodology doc for the exact ordering and justification.
 
 ## 3. Findings
 
-### F1 — SQL injection admin takeover on `POST /rest/user/login`
-
-**Severity:** Critical  —  **Likelihood:** High (the endpoint is reachable
-unauthenticated; a single request lands the exploit)
-
-**What it is.** Juice Shop's login endpoint concatenates the `email` request
-body field directly into its SQL query. A classic single-quote tautology
-(`' OR 1=1--`) matches every row, the server returns the first — which
-happens to be the administrator — and issues a signed JWT for that account.
-
-**Evidence.** [scans/before/10-curl-sqli-login.txt](../scans/before/10-curl-sqli-login.txt)
-shows the server returning HTTP 200 with a token in the `authentication.token`
-field. Decoded JWT payload:
-
-```json
-{
-  "data": {
-    "id": 1,
-    "email": "admin@juice-sh.op",
-    "password": "0192023a7bbd73250516f069df18b500",
-    "role": "admin"
-  }
-}
-```
-
-**Reproduction (from clientA).**
-
-```bash
-curl -s -X POST http://10.10.20.20:3000/rest/user/login \
-  -H 'Content-Type: application/json' \
-  --data-raw "{\"email\":\"' OR 1=1--\",\"password\":\"x\"}"
-```
-
-**Demonstrated impact.** Full administrative access to the Juice Shop user
-database, order history, product catalogue, and administrative APIs through
-the returned JWT. Combined with F5, the admin's password hash is also
-disclosed in the same response and is trivially crackable offline.
-
-**Remediation.** Juice Shop is intentionally vulnerable and cannot be patched
-(project constraint). Containment:
-
-- The service is only reachable from subnet A, which in a real environment
-  would be a restricted admin VLAN. The Vagrantfile disables the host port
-  forward for clientB so there is no bypass from the host.
-- The rate-limit added for F2 raises the cost of iterating payloads from one
-  source, though it does not prevent the one-shot exploit.
-
-**Verification command (fails for this finding — exploit still works).**
-
-```bash
-curl -s -X POST http://10.10.20.20:3000/rest/user/login \
-  -H 'Content-Type: application/json' \
-  --data-raw "{\"email\":\"' OR 1=1--\",\"password\":\"x\"}" | grep -q token && echo "F1 OPEN (expected, accepted)"
-```
-
----
-
 ### F2 — No rate-limit on the authentication endpoint
 
 **Severity:** High  —  **Likelihood:** High
@@ -156,9 +95,8 @@ done
 ```
 
 **Demonstrated impact.** On its own: no secret is recovered, but the primitive
-exists. Combined with F5 (admin password is `admin123`) it means an attacker
-without the SQLi (F1) can still brute-force the admin account in seconds using
-a trivial wordlist.
+exists. Any weak password in the user table becomes recoverable in seconds
+through dictionary guessing at line rate.
 
 **Remediation.** Commit [`c131905`](../remediation/notes.md). Added an
 iptables `hashlimit` rule on the gateway that drops NEW TCP connections to
@@ -228,10 +166,10 @@ location ~ ^/ftp(/|$)                         { return 404; }
 location = /rest/admin/application-version    { return 404; }
 ```
 
-Everything else is proxied through unchanged, so the app still functions and
-the SQLi (F1) still demonstrates — containment at the perimeter, not a patch
-to the service. This matches the subject's "firewall policy, network
-segmentation, access control" definition of containment.
+Everything else is proxied through unchanged, so the app still functions —
+containment at the perimeter, not a patch to the service. This matches the
+subject's "firewall policy, network segmentation, access control"
+definition of containment.
 
 **Verification command (passes after remediation).**
 
@@ -319,54 +257,6 @@ sudo nmap -Pn -p 22 10.10.20.10 | grep -E '^22/tcp' | grep -q filtered && echo "
 
 ---
 
-### F5 — Weak admin password with MD5 hash leaked in JWT
-
-**Severity:** High  —  **Likelihood:** Medium (requires F1 to acquire a token,
-or any authenticated session on the app; cracking is trivial)
-
-**What it is.** Two defects compound here:
-
-1. The administrator account uses the password `admin123` — a top-10 common
-   password.
-2. Every JWT issued by Juice Shop embeds the user's password hash
-   (`password` field) in the base64 payload. The hash is unsalted MD5.
-
-Any legitimate login — and any SQL-injection result from F1 — exposes the
-hash to the client. MD5 of `admin123` is `0192023a7bbd73250516f069df18b500`,
-which matches without any cracking work:
-
-```
-$ echo -n "admin123" | md5sum
-0192023a7bbd73250516f069df18b500  -
-```
-
-**Evidence.** [scans/before/13-crack-admin-hash.txt](../scans/before/13-crack-admin-hash.txt).
-The hash itself is visible in [scans/before/10-curl-sqli-login.txt](../scans/before/10-curl-sqli-login.txt).
-
-**Reproduction.** Take the JWT returned by the F1 exploit, base64-decode the
-middle segment, read the `password` field, pass it through `hashcat -m 0` or
-simply try `admin123`.
-
-**Demonstrated impact.** The attacker possesses both a valid admin session
-and the admin's plaintext password. Password reuse across other systems (a
-real-world attacker's primary goal) is now achievable at zero cost.
-
-**Remediation.** Juice Shop ships with `admin123` and the MD5-in-JWT by
-design; both are inside the application and out of scope. Containment:
-
-- The rate-limit from F2 blunts brute-force guesses against the admin
-  account for attackers who don't have F1.
-- No further IaC change. Documented as accepted risk.
-
-**Verification command (fails — accepted).**
-
-```bash
-echo -n "admin123" | md5sum | grep -q 0192023a7bbd73250516f069df18b500 && \
-  echo "F5 OPEN (accepted — weak default password shipped with service)"
-```
-
----
-
 ## 4. Risk rating rationale
 
 Severity reflects the technical blast radius. Likelihood reflects how much an
@@ -374,11 +264,9 @@ attacker needs in place first.
 
 | | Severity rationale | Likelihood rationale |
 |---|---|---|
-| F1 | Full admin takeover of the app with one unauthenticated HTTP request. | One request, no credentials — the only cost is finding the endpoint, which the scan does in seconds. |
 | F2 | No direct secret disclosure, but turns every weak-credential issue into a solved one at line rate. | No prerequisites; the primitive is always available from subnet A. |
 | F3 | Business-data disclosure; enables further exploits (version → CVE). | Trivially reproduced with `curl`; no authentication. |
 | F4 | A pivot into the gateway compromises *every* machine in the lab (the gateway holds the private key that authorizes admin1 on all clients). | Requires a foothold on A or B first — hence Medium, not High. |
-| F5 | Password material disclosed + weak default → full account compromise beyond the app itself if reused. | Requires either F1 or a legitimate user session; cracking is zero-effort. |
 
 ---
 
@@ -395,10 +283,6 @@ for the commit-per-finding mapping.
 - `29a641c` — F3 reverse proxy. Juice Shop bound to loopback,
   nginx on `10.10.20.20:3000` returns 404 for `/ftp*` and
   `/rest/admin/application-version`, proxies everything else through.
-
-The two remaining findings (F1, F5) are Juice Shop internals. They are
-not patched; they are **contained** at the network layer (firewall
-rate-limit, segmentation) and documented.
 
 ---
 
@@ -423,22 +307,16 @@ The relevant pairs:
 
 The remaining scans (`01-04`, `06-07`, `10`) produce the same output before
 and after, because the fixes do not change what clientA sees of the lab
-topology — the service is still reachable, the SQLi still works, etc. That
-is the intended outcome: the four findings that were fixed are either
-*infrastructure* findings (F2, F4) or *path-level containment* (F3); the
-two findings that remain as accepted-risk are *service* findings that must
-still deploy on rebuild per the project rules.
+topology — the service is still reachable, traffic to port 3000 is still
+permitted (subject to the new rate-limit), and the `/` home page still
+responds. That is the intended outcome: these fixes are infrastructure and
+containment, not changes to the application's behaviour on allowed paths.
 
 ### Targeted one-command verification per finding
 
 Each of the commands below is included for a live audit:
 
 ```bash
-# F1 — accepted, expected to succeed as exploit:
-curl -s -X POST http://10.10.20.20:3000/rest/user/login \
-  -H 'Content-Type: application/json' \
-  --data-raw "{\"email\":\"' OR 1=1--\",\"password\":\"x\"}" | grep -q token && echo "F1 OPEN (accepted)"
-
 # F2 — fixed; expect rate-limit drops among 25 attempts:
 for i in $(seq 1 25); do curl -s --max-time 5 -o /dev/null -w "%{http_code}\n" \
   -X POST http://10.10.20.20:3000/rest/user/login \
@@ -453,9 +331,6 @@ test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404
 
 # F4 — fixed; SSH to the gateway is filtered:
 sudo nmap -Pn -p 22 10.10.20.10 | grep -E '^22/tcp' | grep -q filtered && echo "F4 CLOSED"
-
-# F5 — accepted, weak default password:
-echo -n admin123 | md5sum | grep -q 0192023a7bbd73250516f069df18b500 && echo "F5 OPEN (accepted)"
 ```
 
 ---
@@ -475,10 +350,6 @@ Issues known to the assessor and deliberately left unaddressed:
 - **`AllowUsers *@10.0.2.*` on clientB's sshd** — required for Vagrant
   provisioning via NAT. In production there would be no NAT adapter and this
   clause would be removed.
-- **Juice Shop internal bugs (F1, F5).** Service-level fixes forbidden by
-  project rules; contained at the network layer where possible (the
-  rate-limit addressed brute-force; the SQLi and the MD5-in-JWT are
-  structural). F3 was fixable with a reverse proxy and is now closed.
 
 ---
 
