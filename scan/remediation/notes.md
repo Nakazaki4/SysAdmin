@@ -7,7 +7,7 @@ Each finding is linked to the commit that fixes it. All fixes live in the IaC
 |---|---|---|---|
 | F1 — SQLi admin bypass on `/rest/user/login` | Compensating controls only (service cannot be patched) | see F2, F4 | `provision/gateway.sh` |
 | F2 — No login rate-limit | Fixed via network containment | `c131905` | `provision/gateway.sh` |
-| F3 — Info disclosure (`/rest/admin/application-version`, `/ftp`) | **Fixed** via reverse proxy on clientB | `<nginx-commit>` | `provision/juiceshop.sh`, `provision/nginx.sh`, `Vagrantfile` |
+| F3 — Info disclosure (`/rest/admin/application-version`, `/ftp`) | **Fixed** via reverse proxy on clientB | `29a641c` | `provision/juiceshop.sh`, `provision/nginx.sh`, `Vagrantfile` |
 | F4 — Gateway exposed SSH/DNS on subnet-B interface | Fixed | `c131905` | `provision/gateway.sh` |
 | F5 — Weak admin password + MD5-in-JWT | Compensating controls only | see F2 | `provision/gateway.sh` |
 | Extra — `admin1`/`dev1`/`deploy1` had no password | Fixed | `a81a167` | `provision/login.sh` |
@@ -32,7 +32,7 @@ File: [provision/gateway.sh](../provision/gateway.sh)
   layer can get to mitigating F1/F5 (it raises the cost of SQLi retries and of
   stealing a token, though a single successful SQLi still works).
 
-### `<nginx-commit>` — containment of Juice Shop's information disclosure
+### `29a641c` — containment of Juice Shop's information disclosure
 
 Files: [provision/juiceshop.sh](../provision/juiceshop.sh),
 [provision/nginx.sh](../provision/nginx.sh), [Vagrantfile](../Vagrantfile).
@@ -80,7 +80,7 @@ The subject explicitly asks: for the deliberately vulnerable service, patch by
 - **F3 (info disclosure)** cannot be fixed at the *firewall* level because
   `/ftp` and `/rest/admin/application-version` share the port with the real
   app. Containment was done at the next layer up — a reverse proxy on
-  clientB that returns 404 for those paths. See `<nginx-commit>`.
+  clientB that returns 404 for those paths. See `29a641c`.
 
 ## Accepted risks (documented, not fixed)
 
@@ -88,4 +88,4 @@ The subject explicitly asks: for the deliberately vulnerable service, patch by
 |---|---|
 | `remote_machines_ed25519` private key lives in the repo and is mounted into the gateway at `/vagrant/remote_machines_ed25519` | Lab convenience. The whole-lab topology assumes anyone with repo access is already a trusted user. A real deployment would generate the key on first provision and never check it in. |
 | `AllowUsers *@10.0.2.*` on clientB | Required so `vagrant provision clientB` works through the NAT adapter. Removing it makes future rebuilds fail. In a real environment there would be no NAT adapter and no need for this clause. |
-| Juice Shop internal vulnerabilities (F1, F3, F5) | The service is deliberately vulnerable and must still deploy on rebuild (subject requirement). |
+| Juice Shop internal vulnerabilities (F1, F5) | The service is deliberately vulnerable and must still deploy on rebuild (subject requirement). F3 was also such a bug, but was fixable at the perimeter via nginx (commit `29a641c`) and is now closed. |

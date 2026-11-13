@@ -218,7 +218,7 @@ curl -s http://10.10.20.20:3000/ftp
 encrypted secrets (`incident-support.kdbx`), coupon codes, and the app's
 `package.json.bak` which reveals the full dependency tree.
 
-**Remediation.** Commit [`<nginx-commit>`](../remediation/notes.md). Juice
+**Remediation.** Commit [`29a641c`](../remediation/notes.md). Juice
 Shop is now bound to `127.0.0.1:3000` inside clientB, and nginx listens on
 `10.10.20.20:3000` as a reverse proxy. Two `location` blocks return 404 for
 the sensitive paths before the request ever reaches the app:
@@ -392,7 +392,7 @@ for the commit-per-finding mapping.
   gets an address on rebuild (regression discovered during verification).
 - `a81a167` — `login.sh`: give `admin1`/`dev1`/`deploy1` a password so `sudo`
   prompts are answerable.
-- `<nginx-commit>` — F3 reverse proxy. Juice Shop bound to loopback,
+- `29a641c` — F3 reverse proxy. Juice Shop bound to loopback,
   nginx on `10.10.20.20:3000` returns 404 for `/ftp*` and
   `/rest/admin/application-version`, proxies everything else through.
 
