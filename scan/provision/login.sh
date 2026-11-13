@@ -5,6 +5,9 @@ sudo apt-get install acl -y
 sudo useradd -m -s /bin/bash admin1
 sudo useradd -m -s /bin/bash dev1
 sudo useradd -m -s /bin/bash deploy1
+# Passwords so `sudo` works. Lab-only default; a real deployment would inject
+# these via Vagrant env (e.g. $ADMIN1_PW) or pull from a secrets manager.
+echo -e 'admin1:changeme\ndev1:changeme\ndeploy1:changeme' | sudo chpasswd
 # groups
 sudo groupadd shared
 sudo groupadd admin
