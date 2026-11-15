@@ -28,8 +28,7 @@ answer higher-layer probes.
 Goal: find hosts in subnet B that are reachable at L3 through the gateway.
 
 - `nmap -sn -PE 10.10.20.0/24` from clientA. `-PE` forces ICMP echo so the
-  probe does not rely on open TCP ports that may be filtered. ICMP is allowed
-  A↔B by the gateway firewall, so any live host in subnet B should answer.
+  probe does not rely on open TCP ports that may be filtered. So any live host in subnet B should answer.
 
 ### Step 3 — Port enumeration (full TCP SYN sweep)
 
@@ -39,8 +38,6 @@ Goal: find every TCP port exposed by every discovered host to subnet A.
   65535 ports, `-sS` uses a SYN scan (requires root, faster and quieter than a
   full connect), `-Pn` skips host discovery (we already did that in step 2),
   `--min-rate` keeps the scan from stalling on filtered ports.
-- The subject warned that this takes tens of minutes. Each run is saved; nothing
-  is re-run unless the inputs change.
 
 ### Step 4 — Service and version detection (`-sV`)
 
@@ -53,8 +50,8 @@ Goal: for every open port found in step 3, identify the service and version.
 
 ### Step 5 — Default-script scan (`-sC`)
 
-Goal: let nmap's NSE default scripts pull more context from each open service
-(HTTP titles, headers, banner, SMB shares, SSH key types, etc.) — a cheap way
+Goal: let nmap's default scripts pull more context from each open service
+(HTTP titles, headers, banner, SSH key types, etc.) — a cheap way
 to surface misconfigurations without writing any code.
 
 - `nmap -sC -p <ports> <host>`.
@@ -64,8 +61,7 @@ to surface misconfigurations without writing any code.
 Goal: identify the operating system where possible.
 
 - `nmap -O <host>`. Needs root. Works best when there is a mix of open and
-  closed TCP ports; in a locked-down environment OS detection often returns
-  "Too many fingerprints match" or no match.
+  closed TCP ports.
 
 ### Step 7 — Application-layer probes
 
@@ -74,21 +70,9 @@ information-disclosure paths. Not a scanner; done with `curl`. Saved as
 separate files per endpoint.
 
 - `GET /` — baseline
-- `GET /rest/admin/application-version` — Juice Shop's version endpoint
 - `GET /ftp` — Juice Shop's documented directory-listing exposure
 - `POST /rest/user/login` — tested with a SQL-injection payload and with a
   rapid burst of wrong passwords to check for rate-limiting
-
-## Why this order
-
-Each step is cheap compared to the one after it, and each narrows the target
-for the next. ARP tells me who is there. `nmap -sn` extends that across the
-router. `-p-` tells me what is open. `-sV`/`-sC` tell me what it is. `-O` tells
-me what OS it runs on. Only then do I send application-layer payloads.
-
-Reversing this order would waste time (running `-sV --script=http-*` against
-all 65535 ports instead of the one that was open) and send more noise than
-necessary — which, in a real engagement, is how you get caught.
 
 ## Evidence files
 

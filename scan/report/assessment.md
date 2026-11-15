@@ -5,7 +5,7 @@
 **Scope:** The three-VM lab defined by `Vagrantfile` — one gateway bridging two
 isolated subnets (A: `10.10.10.0/24`, B: `10.10.20.0/24`), one DHCP client on
 subnet A (`clientA`), one web-service host on subnet B (`clientB`) running
-OWASP Juice Shop 20.4.0-SNAPSHOT behind the gateway.
+OWASP Juice Shop behind the gateway.
 **Vantage point:** an outsider with L2 access to subnet A and no credentials —
 i.e. a shell on `clientA`, nothing else.
 
@@ -19,8 +19,6 @@ SSH from inside the lab — a textbook unintended foothold. On top of that,
 the deliberately-vulnerable Juice Shop service was reachable with no
 rate-limiting at all, and it exposed two information-disclosure endpoints
 (a directory listing and a version banner) to any unauthenticated caller.
-The project rules forbid patching the service itself, so the containment
-had to happen at the perimeter: iptables and a thin nginx reverse proxy.
 
 Three findings were investigated. All three were closed by changes to the
 Infrastructure-as-Code so that rebuilding the lab from scratch does not
@@ -35,9 +33,6 @@ on the gateway.
 | F3 | Information disclosure (`/rest/admin/application-version`, `/ftp`) | Medium | High | **Fixed** (nginx reverse proxy strips the paths) |
 | F4 | Gateway exposed SSH and DNS to the lab subnets | High | Medium | **Fixed** (gateway INPUT chain) |
 
-An additional configuration defect — three local users created without a
-password, making `sudo` unusable — was found during exploitation and fixed
-in the same pass.
 
 ---
 
@@ -45,17 +40,16 @@ in the same pass.
 
 Full methodology document: [scans/before/00-methodology.md](../scans/before/00-methodology.md).
 
-In short, I worked from the outside in, following the layering of the
+I worked from the outside in, following the layering of the
 protocols involved:
 
 1. **ARP** — `arp-scan --localnet` on clientA's subnet-A interface, then on
    the subnet-B range to confirm ARP does not cross the router.
-2. **IP** — `nmap -sn -PE` across subnet B, using ICMP since the gateway
-   permits ICMP both ways.
+2. **IP** — `nmap -sn -PE` across subnet B, using ICMP
 3. **TCP** — `nmap -Pn -sS -p-` full-port SYN sweep of every discovered host
    (clientB and the gateway's subnet-B interface).
 4. **Service + version + default scripts** — `nmap -sV -sC` against only the
-   ports that step 3 reported as open, to save time.
+   ports that step 3 reported as open.
 5. **OS fingerprint** — `nmap -O` best-effort; works poorly against highly
    filtered hosts, as expected.
 6. **HTTP application-layer probes** — `curl` against known Juice Shop
@@ -100,9 +94,8 @@ through dictionary guessing at line rate.
 
 **Remediation.** Commit [`c131905`](../remediation/notes.md). Added an
 iptables `hashlimit` rule on the gateway that drops NEW TCP connections to
-clientB:3000 after a burst of 20 and more than 10/minute per source IP. A
-human using the app is unaffected; a brute-force loop is DROPped. This is a
-network-layer containment because the project forbids patching Juice Shop.
+clientB:3000 after a burst of 20 and more than 10/minute per source IP.
+A brute-force loop is dropped.
 
 **Verification command (passes after remediation).**
 
@@ -130,29 +123,23 @@ done | grep -c '^000'
 
 **Severity:** Medium  —  **Likelihood:** High
 
-**What it is.** Two unauthenticated endpoints leak sensitive information:
+**What it is.** unauthenticated leak sensitive information:
 
-- `GET /rest/admin/application-version` returns the exact Juice Shop version,
-  enabling direct CVE lookup. Despite the `/admin/` path prefix, no
-  authentication is required.
 - `GET /ftp` serves an HTML directory listing of a server-side folder, which
   contains `incident-support.kdbx` (a KeePass database), `coupons_2013.md.bak`
   (business data), `package.json.bak`, `legal.md`, and more.
 
 **Evidence.**
-- [scans/before/08-curl-version.txt](../scans/before/08-curl-version.txt) →
-  `{"version":"20.4.0-SNAPSHOT"}`
 - [scans/before/09-curl-ftp.txt](../scans/before/09-curl-ftp.txt) → full HTML
   directory listing with 11 named files.
 
 **Reproduction.**
 
 ```bash
-curl -s http://10.10.20.20:3000/rest/admin/application-version
 curl -s http://10.10.20.20:3000/ftp
 ```
 
-**Demonstrated impact.** Version pivot (CVE lookup) and direct download of
+**Demonstrated impact.** direct download of
 encrypted secrets (`incident-support.kdbx`), coupon codes, and the app's
 `package.json.bak` which reveals the full dependency tree.
 
@@ -163,7 +150,6 @@ the sensitive paths before the request ever reaches the app:
 
 ```nginx
 location ~ ^/ftp(/|$)                         { return 404; }
-location = /rest/admin/application-version    { return 404; }
 ```
 
 Everything else is proxied through unchanged, so the app still functions —
@@ -176,17 +162,14 @@ definition of containment.
 ```bash
 # Both paths must 404; the home page must still 200.
 test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404 \
-  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/rest/admin/application-version)" = 404 \
-  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/)" = 200 \
-  && echo "F3 CLOSED"
+&& test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/)" = 200 \
+&& echo "F3 CLOSED"
 ```
 
 **Before vs after.**
 
 | File | Content |
 |---|---|
-| `scans/before/08-curl-version.txt` | `HTTP/1.1 200 OK` + `{"version":"20.4.0-SNAPSHOT"}` |
-| `scans/after/08-curl-version.txt` | `HTTP/1.1 404 Not Found` from nginx |
 | `scans/before/09-curl-ftp.txt` | Full HTML directory listing of 11 files |
 | `scans/after/09-curl-ftp.txt` | `HTTP/1.1 404 Not Found` from nginx |
 
@@ -194,16 +177,13 @@ test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404
 
 ### F4 — Gateway exposed SSH and DNS to the lab subnets
 
-**Severity:** High  —  **Likelihood:** Medium (requires an already-compromised
-foothold on subnet A or B, but then presents an immediate pivot into the
-gateway itself)
+**Severity:** High  —  **Likelihood:** Medium
 
 **What it is.** The gateway's firewall only filtered the FORWARD chain. The
 INPUT chain — traffic destined to the gateway — was left at the default policy
 ACCEPT, so a port scan from clientA against the gateway's own subnet-B
 interface showed `22/tcp open ssh` and `53/tcp open domain`. An attacker who
-had compromised either client could SSH directly into the gateway (the
-single trust-anchor of the lab).
+had compromised either client could SSH directly into the gateway.
 
 **Evidence.** [scans/before/05-nmap-full-tcp-gateway.txt](../scans/before/05-nmap-full-tcp-gateway.txt):
 
@@ -300,7 +280,6 @@ The relevant pairs:
 | Finding | Before | After | Difference |
 |---|---|---|---|
 | F2 | `11-curl-ratelimit.txt` | `11-curl-ratelimit.txt` | All 10 attempts served → several attempts timed out (000 after 5 s) |
-| F3 | `08-curl-version.txt` | `08-curl-version.txt` | `200 OK` + version JSON → `404 Not Found` (from nginx) |
 | F3 | `09-curl-ftp.txt` | `09-curl-ftp.txt` | Full HTML directory listing → `404 Not Found` (from nginx) |
 | F4 | `05-nmap-full-tcp-gateway.txt` | `05-nmap-full-tcp-gateway.txt` | `22/tcp open ssh` + `53/tcp` → `53/tcp` only |
 | F4 | `12-gateway-iptables-live.txt` | `12-gateway-iptables-live.txt` | No INPUT rules → INPUT policy DROP with allowlist |
@@ -308,60 +287,5 @@ The relevant pairs:
 The remaining scans (`01-04`, `06-07`, `10`) produce the same output before
 and after, because the fixes do not change what clientA sees of the lab
 topology — the service is still reachable, traffic to port 3000 is still
-permitted (subject to the new rate-limit), and the `/` home page still
-responds. That is the intended outcome: these fixes are infrastructure and
-containment, not changes to the application's behaviour on allowed paths.
-
-### Targeted one-command verification per finding
-
-Each of the commands below is included for a live audit:
-
-```bash
-# F2 — fixed; expect rate-limit drops among 25 attempts:
-for i in $(seq 1 25); do curl -s --max-time 5 -o /dev/null -w "%{http_code}\n" \
-  -X POST http://10.10.20.20:3000/rest/user/login \
-  -H 'Content-Type: application/json' -d "{\"email\":\"a@b\",\"password\":\"x$i\"}"; done | grep -c '^000'
-# >0 means the rate-limit fired
-
-# F3 — fixed; nginx returns 404 for both paths, app home still 200:
-test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/ftp)" = 404 \
-  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/rest/admin/application-version)" = 404 \
-  && test "$(curl -s -o /dev/null -w %{http_code} http://10.10.20.20:3000/)" = 200 \
-  && echo "F3 CLOSED"
-
-# F4 — fixed; SSH to the gateway is filtered:
-sudo nmap -Pn -p 22 10.10.20.10 | grep -E '^22/tcp' | grep -q filtered && echo "F4 CLOSED"
-```
-
----
-
-## 7. Accepted risks
-
-Issues known to the assessor and deliberately left unaddressed:
-
-- **`remote_machines_ed25519` private key committed to the repo.** The
-  key authorizes `admin1` on every client and is mounted into the gateway at
-  `/vagrant/remote_machines_ed25519`. Anyone with repo access has shell on
-  every VM. This is the single largest exposure in absolute terms but is
-  accepted because the lab topology was built with the assumption that
-  repo-readers are trusted; removing the key would require replacing most of
-  the provisioning. Noted here so that nobody treats this repository layout
-  as a model for production.
-- **`AllowUsers *@10.0.2.*` on clientB's sshd** — required for Vagrant
-  provisioning via NAT. In production there would be no NAT adapter and this
-  clause would be removed.
-
----
-
-## 8. Reproducing this assessment
-
-```bash
-git clone <repo>
-cd scan
-vagrant up                                    # bring up the three VMs
-bash scans/run-scans.sh before                # or after, if validating a fix
-cat report/assessment.md
-```
-
-All scans run from clientA via the gateway as a bastion; see
-`scans/run-scans.sh` for the exact SSH options used.
+permitted, and the `/` home page still
+responds.

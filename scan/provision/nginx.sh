@@ -3,9 +3,6 @@
 # information-disclosure paths called out in F3. Juice Shop itself is
 # bound to 127.0.0.1 (see juiceshop.sh), so clients can only reach it
 # through this proxy.
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-
 apt-get update -q
 apt-get install -y -q nginx
 

@@ -1,6 +1,6 @@
-Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 12:41 +00
+Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 14:56 +00
 Nmap scan report for 10.10.20.10
-Host is up (0.00033s latency).
+Host is up (0.00049s latency).
 Nmap scan report for 10.10.20.20
-Host is up (0.00026s latency).
-Nmap done: 256 IP addresses (2 hosts up) scanned in 7.75 seconds
+Host is up (0.0010s latency).
+Nmap done: 256 IP addresses (2 hosts up) scanned in 7.56 seconds

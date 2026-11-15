@@ -2,7 +2,6 @@
 # Runs the full baseline scan from clientA and saves evidence to $1 (before/after).
 # Must be run from the repo root. Uses the vagrant-user key via bastion for root
 # on clientA — that is the setup the methodology documents.
-set -euo pipefail
 
 OUT=${1:?usage: run-scans.sh <before|after>}
 OUT_DIR="scans/$OUT"

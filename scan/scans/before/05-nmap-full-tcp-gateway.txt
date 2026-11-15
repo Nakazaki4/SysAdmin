@@ -1,9 +1,9 @@
-Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 12:42 +00
+Starting Nmap 7.95 ( https://nmap.org ) at 2026-11-13 14:58 +00
 Nmap scan report for 10.10.20.10
-Host is up (0.000092s latency).
-Not shown: 65533 closed tcp ports (reset)
+Host is up (0.00065s latency).
+Not shown: 65534 filtered tcp ports (no-response)
+Some closed ports may be reported as filtered due to --defeat-rst-ratelimit
 PORT   STATE SERVICE
-22/tcp open  ssh
 53/tcp open  domain
 
-Nmap done: 1 IP address (1 host up) scanned in 1.43 seconds
+Nmap done: 1 IP address (1 host up) scanned in 71.30 seconds
